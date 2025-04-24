@@ -45,20 +45,62 @@ The system consists of several key components:
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.9+
 - A running LangGraph Server
+- Poetry (optional, for dependency management)
 
 ### Installation
 
+#### Using Poetry (Recommended)
+
 1. Clone the repository
-2. Install dependencies:
-```
-pip install fastapi uvicorn httpx pydantic langgraph-sdk
-```
+2. Install Poetry if you haven't already:
+   ```
+   curl -sSL https://install.python-poetry.org | python3 -
+   ```
+3. Install dependencies:
+   ```
+   poetry install
+   ```
+4. Activate the virtual environment (Poetry 2.0.0+):
+   ```
+   # Option 1 (recommended)
+   poetry env use python
+   poetry env activate
+   
+   # Option 2: Install the shell plugin
+   poetry plugin add poetry-plugin-shell
+   poetry shell
+   
+   # Option 3: Activate directly
+   source $(poetry env info --path)/bin/activate  # Unix/macOS
+   ```
+
+#### Using pip (Alternative)
+
+1. Clone the repository
+2. Create a virtual environment:
+   ```
+   python -m venv .venv
+   source .venv/bin/activate  # On Unix/macOS
+   # OR
+   .venv\Scripts\activate     # On Windows
+   ```
+3. Install dependencies:
+   ```
+   pip install -e .
+   ```
 
 ### Configuration
 
 All configuration settings are centralized in `config.py` and loaded from environment variables with sensible defaults.
+
+You can create a `.env` file in the project root based on the provided `.env.example`:
+
+```
+cp .env.example .env
+# Then edit .env with your specific values
+```
 
 Set the following environment variables:
 
@@ -84,6 +126,18 @@ Set the following environment variables:
 - `AGENT_SKILLS` - JSON array of skills objects with format: `[{"id": "skill_id", "name": "Skill Name", "description": "Skill description", "examples": ["example1", "example2"]}]` (default: basic chat skill)
 
 ### Running the Server
+
+#### Using Poetry
+
+```
+# If environment is activated
+python main.py
+
+# Or without activating
+poetry run python main.py
+```
+
+#### Using standard Python
 
 ```
 python main.py
@@ -124,4 +178,4 @@ To support new LangGraph features, update the `LangGraphClientWrapper` class in 
 
 ## License
 
-[MIT License](LICENSE) 
+[MIT License](LICENSE)

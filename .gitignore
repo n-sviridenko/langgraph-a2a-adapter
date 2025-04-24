@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+pytest-*.xml
+.coverage
+htmlcov/
+
+# Environment
+.env
+.venv
+venv/
+ENV/
+
+# Poetry
+.poetry-cache/
+# Uncomment the next line if you want to ignore the lock file
+# poetry.lock
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.*.kate-swp
+.DS_Store
+
+# Project-specific
+.ruff_cache/
+
+# Operating System Files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.directory 

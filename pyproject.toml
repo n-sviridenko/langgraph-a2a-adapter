@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "langgraph-a2a-proxy"
+version = "0.1.0"
+description = "A2A-compliant FastAPI server that proxies to LangGraph Server API"
+authors = ["Nikita Sviridenko <nikita.sviridenko@voypost.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0.0"
+fastapi = ">=0.115.12"
+uvicorn = ">=0.34.2"
+httpx = ">=0.24.1"
+pydantic = ">=2.11.3"
+starlette = ">=0.46.2"
+langgraph-sdk = ">=0.1.63"
+python-dotenv = ">=1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api" 
