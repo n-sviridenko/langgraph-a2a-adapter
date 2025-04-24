@@ -27,7 +27,11 @@ from a2a_models import (
     PushNotificationConfig, AgentCard
 )
 from langgraph_client import LangGraphClientWrapper
-from agent_card import get_agent_card_from_env, get_base_url
+from agent_card import get_agent_card_from_env
+from config import (
+    LANGGRAPH_API_URL, LANGGRAPH_API_KEY, LANGGRAPH_GRAPH_ID,
+    A2A_PUSH_NOTIFICATION_TIMEOUT, get_base_url
+)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -44,19 +48,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# LangGraph client configuration
-LANGGRAPH_API_URL = os.getenv("LANGGRAPH_API_URL", "http://localhost:8123")
-LANGGRAPH_API_KEY = os.getenv("LANGGRAPH_API_KEY", None)
-LANGGRAPH_GRAPH_ID = os.getenv("LANGGRAPH_GRAPH_ID", None)
-
 # Global LangGraph client wrapper
 client_wrapper = None
 
 # Active WebSocket connections for streaming responses
 websocket_connections: Dict[str, WebSocket] = {}
-
-# Webhook timeout
-WEBHOOK_TIMEOUT = float(os.getenv("WEBHOOK_TIMEOUT", "10.0"))
 
 # Define errors
 JSONRPC_PARSE_ERROR = {"code": -32700, "message": "Invalid JSON payload"}
@@ -289,7 +285,7 @@ async def forward_webhook(webhook_url: str, body: bytes, headers: Dict[str, str]
                 webhook_url,
                 content=body,
                 headers=headers,
-                timeout=WEBHOOK_TIMEOUT
+                timeout=A2A_PUSH_NOTIFICATION_TIMEOUT
             )
             print(f"Webhook forwarded to {webhook_url}, status: {response.status_code}")
             

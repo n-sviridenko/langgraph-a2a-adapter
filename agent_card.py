@@ -3,12 +3,16 @@ Utilities for retrieving and exposing A2A agent cards.
 """
 
 from typing import Dict, List, Optional, Any, Union
-import os
 
 from a2a_models import (
     AgentCard, AgentCapabilities, AgentProvider, AgentSkill, AgentAuthentication
 )
 from langgraph_sdk.schema import Assistant
+from config import (
+    AGENT_NAME, AGENT_DESCRIPTION, AGENT_VERSION,
+    AGENT_DOCUMENTATION_URL, AGENT_PROVIDER_ORG, 
+    AGENT_PROVIDER_URL, get_base_url
+)
 
 
 def get_default_skills() -> List[AgentSkill]:
@@ -60,21 +64,18 @@ def get_agent_card_from_env(
     Returns:
         An A2A AgentCard
     """
-    # Extract properties from environment variables with defaults
-    name = os.getenv("AGENT_NAME", assistant.name or "LangGraph Assistant")
-    description = os.getenv("AGENT_DESCRIPTION", assistant.description or "An AI assistant powered by LangGraph")
-    version = os.getenv("AGENT_VERSION", str(assistant.version or "1.0.0"))
-    documentation_url = os.getenv("AGENT_DOCUMENTATION_URL", None)
+    # Extract properties from configuration with defaults
+    name = AGENT_NAME or assistant.name or "LangGraph Assistant"
+    description = AGENT_DESCRIPTION or assistant.description or "An AI assistant powered by LangGraph"
+    version = AGENT_VERSION or str(assistant.version or "1.0.0")
+    documentation_url = AGENT_DOCUMENTATION_URL
     
     # Provider information (optional)
-    provider_org = os.getenv("AGENT_PROVIDER_ORG", None)
-    provider_url = os.getenv("AGENT_PROVIDER_URL", None)
-    
     provider = None
-    if provider_org:
+    if AGENT_PROVIDER_ORG:
         provider = AgentProvider(
-            organization=provider_org,
-            url=provider_url
+            organization=AGENT_PROVIDER_ORG,
+            url=AGENT_PROVIDER_URL
         )
     
     # Input/output modes - currently only text is fully supported
@@ -106,16 +107,4 @@ def get_agent_card_from_env(
         skills=skills
     )
     
-    return agent_card
-
-
-def get_base_url() -> str:
-    """
-    Get the base URL for the A2A server.
-    """
-    # Check environment variables
-    host = os.getenv("A2A_HOST", "localhost")
-    port = os.getenv("A2A_PORT", "8000")
-    protocol = os.getenv("A2A_PROTOCOL", "http")
-    
-    return f"{protocol}://{host}:{port}" 
+    return agent_card 

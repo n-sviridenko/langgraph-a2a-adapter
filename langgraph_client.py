@@ -7,7 +7,6 @@ import base64
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union, Tuple, AsyncIterator
 import uuid
-import os
 
 from langgraph_sdk import get_client
 from langgraph_sdk.schema import (
@@ -19,7 +18,7 @@ from a2a_models import (
     Message, Part, TaskState, TaskStatus, Task, Artifact,
     TextPart, FilePart, DataPart
 )
-from agent_card import get_base_url
+from config import get_base_url, A2A_TASKS_SEND_WAIT_FOR_COMPLETION
 
 
 class LangGraphClientWrapper:
@@ -114,6 +113,9 @@ class LangGraphClientWrapper:
         if stream:
             return self._create_stream_run(task_id, session_id, assistant_id, input_dict, run_metadata, internal_webhook)
         else:
+            # Check if we should wait for completion or return immediately
+            wait_for_completion = A2A_TASKS_SEND_WAIT_FOR_COMPLETION
+            
             # Create a Run with the input
             run = await self.client.runs.create(
                 thread_id=session_id,
@@ -126,11 +128,12 @@ class LangGraphClientWrapper:
             # Update thread metadata
             await self._update_thread_task_metadata(session_id, task_id, run.run_id)
             
-            # Wait for the run to complete using join
-            run = await self.client.runs.join(
-                thread_id=session_id,
-                run_id=run.run_id
-            )
+            if wait_for_completion:
+                # Wait for the run to complete using join
+                run = await self.client.runs.join(
+                    thread_id=session_id,
+                    run_id=run.run_id
+                )
             
             # Get thread state
             thread_state = await self.client.threads.get_state(session_id)
