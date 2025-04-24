@@ -498,7 +498,7 @@ async def handle_get_push_notification(request: GetTaskPushNotificationRequest) 
         )
 
 
-@app.websocket("/ws")
+@app.websocket("/rpc")
 async def websocket_endpoint(websocket: WebSocket):
     """Handle WebSocket connections for streaming tasks"""
     await websocket.accept()

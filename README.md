@@ -29,7 +29,7 @@ The system consists of several key components:
 
 - `GET /.well-known/agent.json` - Returns the agent card for the default agent (A2A standard discovery endpoint)
 - `POST /rpc` - Main JSON-RPC endpoint for A2A protocol requests
-- `WebSocket /ws` - WebSocket endpoint for streaming A2A responses
+- `WebSocket /rpc` - WebSocket endpoint for streaming A2A responses (same path, different protocol)
 
 #### Supported RPC Methods
 

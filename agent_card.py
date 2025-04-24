@@ -122,8 +122,8 @@ def get_agent_card_from_env(
     default_input_modes = ["text"]
     default_output_modes = ["text"]
     
-    # URL for the agent
-    agent_url = f"{base_url}/.well-known/agent.json"
+    # URL for the agent - point to the RPC endpoint
+    agent_url = f"{base_url}/rpc"
     
     # Get hardcoded capabilities and authentication
     capabilities = get_hardcoded_capabilities()
