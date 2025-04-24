@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketState
+from contextlib import asynccontextmanager
 
 from langgraph_sdk import get_client
 from langgraph_sdk.schema import RunStatus
@@ -38,9 +39,22 @@ from config import (
 )
 
 # Initialize FastAPI app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for FastAPI application"""
+    # Initialize connections and resources on startup
+    global client_wrapper
+    client_wrapper = LangGraphClientWrapper(
+        api_url=LANGGRAPH_API_URL,
+        api_key=LANGGRAPH_API_KEY
+    )
+    yield
+    # Cleanup code would go here if needed
+
 app = FastAPI(
     title="LangGraph A2A Adapter",
-    description="A2A-compliant FastAPI server that uses LangGraph SDK"
+    description="A2A-compliant FastAPI server that uses LangGraph SDK",
+    lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -191,16 +205,6 @@ async def get_assistant_id() -> str:
         
     # Return the first assistant if no match or no filter
     return assistants[0]["assistant_id"]
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize connections and resources on startup"""
-    global client_wrapper
-    client_wrapper = LangGraphClientWrapper(
-        api_url=LANGGRAPH_API_URL,
-        api_key=LANGGRAPH_API_KEY
-    )
 
 
 @app.post("/rpc")
