@@ -180,6 +180,47 @@ class LangGraphClientWrapper:
         # Convert to A2A task
         return self._create_task_from_run(task_id, thread.thread_id, run_info, thread_state)
     
+    def _process_stream_chunk(self, chunk: StreamPart, task_id: str = None) -> Union[TaskStatus, Artifact]:
+        """Process a stream chunk and convert it to either TaskStatus or Artifact.
+        This is a shared helper method that can be used by both internal methods and external code.
+        """
+        if chunk.event == "values":
+            # Values event - convert to TaskStatus
+            return TaskStatus(
+                state=TaskState.WORKING,
+                timestamp=datetime.now()
+            )
+        
+        elif chunk.event == "messages":
+            # Message event - convert to Artifact
+            parts = []
+            
+            # Extract message content
+            if "content" in chunk.data:
+                content = chunk.data["content"]
+                if isinstance(content, str):
+                    parts.append(TextPart(text=content))
+                elif isinstance(content, dict):
+                    parts.append(DataPart(data=content))
+            
+            return Artifact(
+                parts=parts,
+                index=0
+            )
+            
+        elif chunk.event == "end":
+            # End event - yield final status
+            return TaskStatus(
+                state=TaskState.COMPLETED,
+                timestamp=datetime.now()
+            )
+        
+        # For unknown events, return working status
+        return TaskStatus(
+            state=TaskState.WORKING,
+            timestamp=datetime.now()
+        )
+
     async def _create_stream_run(
         self, 
         task_id: str,
@@ -208,39 +249,8 @@ class LangGraphClientWrapper:
         )
         
         async for chunk in stream:
-            if chunk.event == "values":
-                # Values event - convert to TaskStatus
-                status = TaskStatus(
-                    state=TaskState.WORKING,
-                    timestamp=datetime.now()
-                )
-                yield status
-            
-            elif chunk.event == "messages":
-                # Message event - convert to Artifact
-                parts = []
-                
-                # Extract message content
-                if "content" in chunk.data:
-                    content = chunk.data["content"]
-                    if isinstance(content, str):
-                        parts.append(TextPart(text=content))
-                    elif isinstance(content, dict):
-                        parts.append(DataPart(data=content))
-                
-                artifact = Artifact(
-                    parts=parts,
-                    index=0
-                )
-                yield artifact
-                
-            elif chunk.event == "end":
-                # End event - yield final status
-                status = TaskStatus(
-                    state=TaskState.COMPLETED,
-                    timestamp=datetime.now()
-                )
-                yield status
+            # Use the shared helper method to process the chunk
+            yield self._process_stream_chunk(chunk, task_id)
     
     def _message_to_langgraph_input(self, message: Message) -> Dict[str, Any]:
         """Convert A2A message to LangGraph base message format."""

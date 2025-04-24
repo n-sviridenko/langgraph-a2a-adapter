@@ -5,7 +5,7 @@ A2A-compliant FastAPI server that proxies to LangGraph Server API
 import os
 import json
 import uuid
-from typing import Dict, List, Optional, Any, Union, AsyncIterator
+from typing import Dict, List, Optional, Any, Union, AsyncIterator, Tuple, Awaitable
 from datetime import datetime
 
 import httpx
@@ -68,6 +68,69 @@ TASK_NOT_FOUND_ERROR = {"code": -32001, "message": "Task not found"}
 TASK_NOT_CANCELABLE_ERROR = {"code": -32002, "message": "Task cannot be canceled"}
 PUSH_NOTIFICATION_NOT_SUPPORTED_ERROR = {"code": -32003, "message": "Push Notification is not supported"}
 UNSUPPORTED_OPERATION_ERROR = {"code": -32004, "message": "This operation is not supported"}
+
+
+async def send_websocket_update(
+    websocket: WebSocket, 
+    task_id: str, 
+    request_id: str, 
+    update: Union[TaskStatus, Artifact]
+) -> bool:
+    """
+    Send an update over WebSocket based on its type (TaskStatus or Artifact).
+    Returns True if the connection should be closed (final status received).
+    
+    Parameters:
+    - websocket: The WebSocket connection to send to
+    - task_id: The task ID associated with the update
+    - request_id: The JSON-RPC request ID for the response
+    - update: Either a TaskStatus or Artifact update to send
+    
+    Returns:
+    - should_close: True if this is a final status and the connection should close
+    """
+    if isinstance(update, TaskStatus):
+        # Determine if this is a final status
+        is_final = update.state in [TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED]
+        
+        # Create and send status update event
+        status_event = TaskStatusUpdateEvent(
+            id=task_id,
+            status=update,
+            final=is_final
+        )
+        
+        status_response = JSONRPCResponse(
+            jsonrpc="2.0",
+            id=request_id,
+            result=status_event
+        )
+        
+        await websocket.send_text(status_response.json())
+        
+        # Return True if this is a final status (to break the loop)
+        return is_final
+        
+    elif isinstance(update, Artifact):
+        # Create and send artifact update event
+        artifact_event = TaskArtifactUpdateEvent(
+            id=task_id,
+            artifact=update
+        )
+        
+        artifact_response = JSONRPCResponse(
+            jsonrpc="2.0",
+            id=request_id,
+            result=artifact_event
+        )
+        
+        await websocket.send_text(artifact_response.json())
+        
+        # Artifacts don't signal end of communication
+        return False
+    
+    # Unknown update type
+    return False
 
 
 @app.get("/")
@@ -449,61 +512,33 @@ async def handle_streaming_task(websocket: WebSocket, request: SendTaskStreaming
             timestamp=datetime.now()
         )
         
-        status_event = TaskStatusUpdateEvent(
-            id=task_id,
-            status=initial_status,
-            final=False
-        )
+        # Send initial status using the helper
+        await send_websocket_update(websocket, task_id, request.id, initial_status)
         
-        status_response = JSONRPCResponse(
-            jsonrpc="2.0",
-            id=request.id,
-            result=status_event
-        )
+        # Prepare run metadata
+        run_metadata = {"_a2a_task_id": task_id}
+        if message.metadata:
+            # Merge message metadata with our tracking metadata
+            run_metadata.update(message.metadata)
+            
+        # Convert the message to LangGraph format
+        base_message = client_wrapper._message_to_langgraph_input(message)
         
-        await websocket.send_text(status_response.json())
+        # Create the input dict with messages array
+        input_dict = {"messages": [base_message]}
         
         # Start streaming
         async for update in client_wrapper._create_stream_run(
             task_id=task_id,
             thread_id=session_id,
             assistant_id=assistant_id,
-            input_dict=client_wrapper._message_to_langgraph_input(message)
+            input_dict=input_dict,
+            run_metadata=run_metadata
         ):
-            if isinstance(update, TaskStatus):
-                # Send status update
-                status_event = TaskStatusUpdateEvent(
-                    id=task_id,
-                    status=update,
-                    final=(update.state in [TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED])
-                )
-                
-                status_response = JSONRPCResponse(
-                    jsonrpc="2.0",
-                    id=request.id,
-                    result=status_event
-                )
-                
-                await websocket.send_text(status_response.json())
-                
-                # If final, close the connection
-                if status_event.final:
-                    break
-                    
-            elif isinstance(update, Artifact):
-                # Send artifact update
-                artifact_event = TaskArtifactUpdateEvent(
-                    id=task_id,
-                    artifact=update
-                )
-                
-                artifact_response = JSONRPCResponse(
-                    jsonrpc="2.0",
-                    id=request.id,
-                    result=artifact_event
-                )
-                
-                await websocket.send_text(artifact_response.json())
+            # Send the update and check if we should close
+            should_close = await send_websocket_update(websocket, task_id, request.id, update)
+            if should_close:
+                break
         
         # Remove from connections
         if task_id in websocket_connections:
@@ -536,35 +571,50 @@ async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscript
         # Store the websocket connection
         websocket_connections[task_id] = websocket
         
-        # Check if task exists
+        # Try to find the thread and run
         try:
-            task = await client_wrapper.get_task(task_id)
+            # Find the thread and run using the task_id
+            thread, run_id = await client_wrapper._find_thread_by_task_id(task_id)
             
-            # Send current status
-            status_event = TaskStatusUpdateEvent(
-                id=task_id,
-                status=task.status,
-                final=(task.status.state in [TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED])
+            # Get the current run state
+            run_info = await client_wrapper.client.runs.get(thread.thread_id, run_id)
+            thread_state = await client_wrapper.client.threads.get_state(thread.thread_id)
+            
+            # Send the current task status
+            task_state = client_wrapper._run_status_to_task_state(run_info.status)
+            current_status = TaskStatus(
+                state=task_state,
+                timestamp=run_info.updated_at
             )
             
-            status_response = JSONRPCResponse(
-                jsonrpc="2.0",
-                id=request.id,
-                result=status_event
-            )
+            # Send current status using the helper
+            await send_websocket_update(websocket, task_id, request.id, current_status)
             
-            await websocket.send_text(status_response.json())
-            
-            # If task is still running, we need to stream updates
-            if task.status.state in [TaskState.SUBMITTED, TaskState.WORKING]:
-                # This would require a more complex implementation to attach to an existing stream
-                # For simplicity, we'll just periodically check the task status
-                pass
+            # Check if the run is still active (not completed, failed, etc.)
+            # Statuses like "pending", "running", "interrupted" would qualify
+            if run_info.status not in ["success", "error", "timeout", "canceled"]:
+                # Join the existing run using the join method
+                stream = await client_wrapper.client.runs.join(
+                    thread_id=thread.thread_id,
+                    run_id=run_id,
+                    stream=True,
+                    stream_mode=["values", "messages"]
+                )
                 
-            # For now, just close the connection
+                async for chunk in stream:
+                    # Use the shared helper method to process the chunk
+                    update = client_wrapper._process_stream_chunk(chunk, task_id)
+                    
+                    # Send the update and check if we should close
+                    should_close = await send_websocket_update(websocket, task_id, request.id, update)
+                    if should_close:
+                        break
+            
+            # Run is already complete or not streaming, close connection
             await websocket.close()
             
         except ValueError:
+            # Task not found
             error_response = JSONRPCResponse(
                 jsonrpc="2.0",
                 id=request.id,
