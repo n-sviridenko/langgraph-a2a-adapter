@@ -34,7 +34,7 @@ from langgraph_client import LangGraphClientWrapper
 from agent_card import get_agent_card_from_env
 from config import (
     LANGGRAPH_API_URL, LANGGRAPH_API_KEY, LANGGRAPH_GRAPH_ID,
-    A2A_PUSH_NOTIFICATION_TIMEOUT, get_base_url
+    A2A_PUSH_NOTIFICATION_TIMEOUT, get_base_url, A2A_PORT
 )
 
 # Initialize FastAPI app
@@ -721,4 +721,4 @@ async def handle_resubscribe_task(request: TaskResubscriptionRequest) -> AsyncIt
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
+    uvicorn.run("main:app", host="0.0.0.0", port=int(A2A_PORT), reload=True) 

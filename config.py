@@ -11,9 +11,8 @@ LANGGRAPH_API_KEY = os.getenv("LANGGRAPH_API_KEY", None)
 LANGGRAPH_GRAPH_ID = os.getenv("LANGGRAPH_GRAPH_ID", None)
 
 # A2A Server Configuration
-A2A_HOST = os.getenv("A2A_HOST", "localhost")
+A2A_PUBLIC_BASE_URL = os.getenv("A2A_PUBLIC_BASE_URL", "http://localhost:8000")
 A2A_PORT = os.getenv("A2A_PORT", "8000")
-A2A_PROTOCOL = os.getenv("A2A_PROTOCOL", "http")
 A2A_TASKS_SEND_WAIT_FOR_COMPLETION = os.getenv("A2A_TASKS_SEND_WAIT_FOR_COMPLETION", "true").lower() == "true"
 A2A_PUSH_NOTIFICATION_TIMEOUT = float(os.getenv("A2A_PUSH_NOTIFICATION_TIMEOUT", "10.0"))
 
@@ -30,4 +29,4 @@ def get_base_url() -> str:
     """
     Get the base URL for the A2A server.
     """
-    return f"{A2A_PROTOCOL}://{A2A_HOST}:{A2A_PORT}" 
+    return A2A_PUBLIC_BASE_URL 

@@ -110,9 +110,8 @@ Set the following environment variables:
 - `LANGGRAPH_GRAPH_ID` - Optional graph ID to select a specific assistant (if not set, uses the first available assistant)
 
 #### A2A Server Configuration
-- `A2A_HOST` - Hostname for the A2A server (default: `localhost`)
+- `A2A_PUBLIC_BASE_URL` - Internet-facing base URL for the A2A server (default: `http://localhost:8000`)
 - `A2A_PORT` - Port for the A2A server (default: `8000`)
-- `A2A_PROTOCOL` - Protocol for the A2A server (default: `http`)
 - `A2A_TASKS_SEND_WAIT_FOR_COMPLETION` - Whether to wait for task completion when handling `tasks/send` requests (default: `true`)
 - `A2A_PUSH_NOTIFICATION_TIMEOUT` - Timeout in seconds for webhook forwarding (default: `10.0`)
 
