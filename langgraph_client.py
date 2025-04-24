@@ -7,6 +7,7 @@ import base64
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union, Tuple, AsyncIterator
 import uuid
+import os
 
 from langgraph_sdk import get_client
 from langgraph_sdk.schema import (
@@ -18,6 +19,7 @@ from a2a_models import (
     Message, Part, TaskState, TaskStatus, Task, Artifact,
     TextPart, FilePart, DataPart
 )
+from agent_card import get_base_url
 
 
 class LangGraphClientWrapper:
@@ -82,7 +84,8 @@ class LangGraphClientWrapper:
         session_id: str,
         assistant_id: str,
         message: Message,
-        stream: bool = False
+        stream: bool = False,
+        webhook: Optional[str] = None
     ) -> Union[Task, AsyncIterator[Union[TaskStatus, Artifact]]]:
         """Send a message to an assistant and get a response."""
         # Convert A2A message to LangGraph input format
@@ -93,19 +96,31 @@ class LangGraphClientWrapper:
         
         # Prepare run metadata
         run_metadata = {"_a2a_task_id": task_id}
+        
+        # Store the real webhook URL in metadata if provided
+        if webhook:
+            run_metadata["_a2a_webhook_url"] = webhook
+            
+            # Create internal relay webhook URL for LangGraph
+            base_url = get_base_url()
+            internal_webhook = f"{base_url}/webhook-relay/{task_id}"
+        else:
+            internal_webhook = None
+        
         if message.metadata:
             # Merge message metadata with our tracking metadata
             run_metadata.update(message.metadata)
         
         if stream:
-            return self._create_stream_run(task_id, session_id, assistant_id, input_dict, run_metadata)
+            return self._create_stream_run(task_id, session_id, assistant_id, input_dict, run_metadata, internal_webhook)
         else:
             # Create a Run with the input
             run = await self.client.runs.create(
                 thread_id=session_id,
                 assistant_id=assistant_id,
                 input=input_dict,
-                metadata=run_metadata
+                metadata=run_metadata,
+                webhook=internal_webhook
             )
             
             # Update thread metadata
@@ -227,7 +242,8 @@ class LangGraphClientWrapper:
         thread_id: str,
         assistant_id: str,
         input_dict: Dict[str, Any],
-        run_metadata: Dict[str, Any]
+        run_metadata: Dict[str, Any],
+        webhook: Optional[str] = None
     ) -> AsyncIterator[Union[TaskStatus, Artifact]]:
         """Create a streaming run and yield results."""
         # Create a run for streaming
@@ -235,7 +251,8 @@ class LangGraphClientWrapper:
             thread_id=thread_id,
             assistant_id=assistant_id,
             input=input_dict,
-            metadata=run_metadata
+            metadata=run_metadata,
+            webhook=webhook
         )
         
         # Update thread metadata
@@ -374,4 +391,58 @@ class LangGraphClientWrapper:
                     metadata=state.metadata
                 ))
                 
-        return messages 
+        return messages
+
+    async def get_webhook_url_for_task(self, task_id: str) -> Optional[str]:
+        """Get the webhook URL for a task if it exists."""
+        try:
+            # Find the thread and run_id using task_id
+            thread, run_id = await self._find_thread_by_task_id(task_id)
+            
+            # Get the run
+            run_info = await self.client.runs.get(thread.thread_id, run_id)
+            
+            # Get the webhook URL from metadata
+            if run_info.metadata and "_a2a_webhook_url" in run_info.metadata:
+                return run_info.metadata["_a2a_webhook_url"]
+            
+            return None
+        except ValueError:
+            # Task not found
+            return None
+        except Exception as e:
+            print(f"Error retrieving webhook URL for task {task_id}: {str(e)}")
+            return None
+
+    async def update_webhook_url_for_task(self, task_id: str, webhook_url: str) -> bool:
+        """Update the webhook URL for a task."""
+        try:
+            # Find the thread and run_id using task_id
+            thread, run_id = await self._find_thread_by_task_id(task_id)
+            
+            # Get the run
+            run_info = await self.client.runs.get(thread.thread_id, run_id)
+            
+            # Get our relay webhook URL from base_url
+            base_url = get_base_url()
+            internal_webhook_url = f"{base_url}/webhook-relay/{task_id}"
+            
+            # Update run metadata with the real webhook URL
+            metadata = run_info.metadata or {}
+            metadata["_a2a_webhook_url"] = webhook_url
+            
+            # Try to update the run's webhook using the LangGraph API
+            try:
+                # This is a placeholder - the actual SDK might not have this method
+                # You would need to check the LangGraph SDK documentation for the correct approach
+                await self.client.runs.update(thread.thread_id, run_id, webhook=internal_webhook_url)
+            except Exception as e:
+                print(f"Warning: Could not update run webhook: {str(e)}")
+            
+            return True
+        except ValueError:
+            # Task not found
+            return False
+        except Exception as e:
+            print(f"Error updating webhook URL for task {task_id}: {str(e)}")
+            return False 

@@ -52,11 +52,11 @@ LANGGRAPH_GRAPH_ID = os.getenv("LANGGRAPH_GRAPH_ID", None)
 # Global LangGraph client wrapper
 client_wrapper = None
 
-# Storage for push notification configurations
-push_notification_configs: Dict[str, PushNotificationConfig] = {}
-
 # Active WebSocket connections for streaming responses
 websocket_connections: Dict[str, WebSocket] = {}
+
+# Webhook timeout
+WEBHOOK_TIMEOUT = float(os.getenv("WEBHOOK_TIMEOUT", "10.0"))
 
 # Define errors
 JSONRPC_PARSE_ERROR = {"code": -32700, "message": "Invalid JSON payload"}
@@ -252,6 +252,59 @@ async def handle_rpc_request(request: Request):
         )
 
 
+@app.post("/webhook-relay/{task_id}")
+async def webhook_relay(task_id: str, request: Request):
+    """Relay webhook notifications to the actual webhook URL stored in run metadata."""
+    try:
+        # Get the original request body
+        body = await request.body()
+        
+        # Get headers (except host-specific ones)
+        headers = {k: v for k, v in request.headers.items() 
+                  if k.lower() not in ['host', 'content-length']}
+        
+        # Get the actual webhook URL from run metadata
+        # Now _a2a_webhook_url directly contains the real webhook URL
+        webhook_url = await client_wrapper.get_webhook_url_for_task(task_id)
+        
+        if webhook_url:
+            # Forward the request to the actual webhook URL (await directly)
+            result = await forward_webhook(
+                webhook_url=webhook_url,
+                body=body,
+                headers=headers
+            )
+            return result
+        else:
+            return {"status": "warning", "message": "No webhook URL found for this task"}
+    except Exception as e:
+        print(f"Error processing webhook relay: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+async def forward_webhook(webhook_url: str, body: bytes, headers: Dict[str, str]):
+    """Forward webhook payload to the actual webhook URL."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                webhook_url,
+                content=body,
+                headers=headers,
+                timeout=WEBHOOK_TIMEOUT
+            )
+            print(f"Webhook forwarded to {webhook_url}, status: {response.status_code}")
+            
+            # Return the response status and details for LangGraph to know the result
+            return {
+                "status": "ok" if response.status_code < 400 else "error",
+                "status_code": response.status_code,
+                "message": f"Webhook forwarded with status {response.status_code}"
+            }
+    except Exception as e:
+        print(f"Error forwarding webhook to {webhook_url}: {str(e)}")
+        # Raise the exception to inform LangGraph of the failure
+        raise
+
+
 async def handle_send_task(request: SendTaskRequest) -> JSONRPCResponse:
     """Handle tasks/send method"""
     try:
@@ -276,21 +329,20 @@ async def handle_send_task(request: SendTaskRequest) -> JSONRPCResponse:
                 error=JSONRPCError(**JSONRPC_INTERNAL_ERROR, data={"message": str(e)})
             )
         
-        # Send the message
+        # Process webhook if provided
+        webhook_url = None
+        if request.params.pushNotification:
+            push_config = request.params.pushNotification
+            webhook_url = push_config.url
+        
+        # Send the message with webhook if provided
         task = await client_wrapper.send_message(
             task_id=task_id,
             session_id=session_id,
             assistant_id=assistant_id,
-            message=message
+            message=message,
+            webhook=webhook_url
         )
-        
-        # Check for push notification configuration
-        if request.params.pushNotification:
-            push_notification_configs[task_id] = request.params.pushNotification
-            
-            # Trigger a background task to send push notifications
-            # This would be implemented in a real system
-            pass
         
         return JSONRPCResponse(
             jsonrpc="2.0",
@@ -381,8 +433,18 @@ async def handle_set_push_notification(request: SetTaskPushNotificationRequest) 
         task_id = request.params.id
         push_config = request.params.pushNotificationConfig
         
-        # Store the push notification configuration
-        push_notification_configs[task_id] = push_config
+        # Get webhook URL from push config
+        real_webhook_url = push_config.url
+        
+        # Update the webhook URL in run metadata
+        success = await client_wrapper.update_webhook_url_for_task(task_id, real_webhook_url)
+        
+        if not success:
+            return JSONRPCResponse(
+                jsonrpc="2.0",
+                id=request.id,
+                error=JSONRPCError(**TASK_NOT_FOUND_ERROR)
+            )
         
         return JSONRPCResponse(
             jsonrpc="2.0",
@@ -405,17 +467,27 @@ async def handle_get_push_notification(request: GetTaskPushNotificationRequest) 
         # Extract parameters
         task_id = request.params.id
         
-        # Check if push notification config exists
-        if task_id not in push_notification_configs:
+        # Try to get webhook URL from run metadata (will get the real webhook URL)
+        webhook_url = await client_wrapper.get_webhook_url_for_task(task_id)
+        
+        # If no webhook URL found, return error
+        if webhook_url is None:
             return JSONRPCResponse(
                 jsonrpc="2.0",
                 id=request.id,
                 error=JSONRPCError(**PUSH_NOTIFICATION_NOT_SUPPORTED_ERROR)
             )
         
+        # Create a push notification config from the stored URL
+        push_config = PushNotificationConfig(
+            url=webhook_url,
+            authentication=None,
+            token=None
+        )
+        
         config = {
             "id": task_id,
-            "pushNotificationConfig": push_notification_configs[task_id]
+            "pushNotificationConfig": push_config
         }
         
         return JSONRPCResponse(
@@ -515,25 +587,20 @@ async def handle_streaming_task(websocket: WebSocket, request: SendTaskStreaming
         # Send initial status using the helper
         await send_websocket_update(websocket, task_id, request.id, initial_status)
         
-        # Prepare run metadata
-        run_metadata = {"_a2a_task_id": task_id}
-        if message.metadata:
-            # Merge message metadata with our tracking metadata
-            run_metadata.update(message.metadata)
-            
-        # Convert the message to LangGraph format
-        base_message = client_wrapper._message_to_langgraph_input(message)
+        # Process webhook if provided
+        webhook_url = None
+        if request.params.pushNotification:
+            push_config = request.params.pushNotification
+            webhook_url = push_config.url
         
-        # Create the input dict with messages array
-        input_dict = {"messages": [base_message]}
-        
-        # Start streaming
-        async for update in client_wrapper._create_stream_run(
+        # Start streaming using the simplified send_message method
+        async for update in client_wrapper.send_message(
             task_id=task_id,
-            thread_id=session_id,
+            session_id=session_id,
             assistant_id=assistant_id,
-            input_dict=input_dict,
-            run_metadata=run_metadata
+            message=message,
+            stream=True,
+            webhook=webhook_url
         ):
             # Send the update and check if we should close
             should_close = await send_websocket_update(websocket, task_id, request.id, update)
@@ -636,33 +703,6 @@ async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscript
                 await websocket.close()
         except Exception:
             pass
-
-
-async def send_push_notification(task_id: str, event: Union[TaskStatusUpdateEvent, TaskArtifactUpdateEvent]):
-    """Send a push notification for a task update"""
-    if task_id not in push_notification_configs:
-        return
-        
-    config = push_notification_configs[task_id]
-    
-    try:
-        headers = {}
-        if config.token:
-            headers["Authorization"] = f"Bearer {config.token}"
-            
-        # Add authentication if specified
-        if config.authentication:
-            # Implement authentication headers based on schemes
-            pass
-            
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                config.url,
-                json=event.dict(),
-                headers=headers
-            )
-    except Exception as e:
-        print(f"Error sending push notification: {str(e)}")
 
 
 if __name__ == "__main__":
