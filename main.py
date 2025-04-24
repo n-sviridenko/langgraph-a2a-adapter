@@ -166,14 +166,14 @@ async def get_assistant_id() -> str:
     # If LANGGRAPH_GRAPH_ID is set, try to find a matching assistant
     if LANGGRAPH_GRAPH_ID:
         for assistant in assistants:
-            if assistant.graph_id == LANGGRAPH_GRAPH_ID:
-                return assistant.assistant_id
+            if assistant["graph_id"] == LANGGRAPH_GRAPH_ID:
+                return assistant["assistant_id"]
                 
         # If no match is found, log a warning
         print(f"Warning: No assistant found with graph_id {LANGGRAPH_GRAPH_ID}. Using first available assistant.")
         
     # Return the first assistant if no match or no filter
-    return assistants[0].assistant_id
+    return assistants[0]["assistant_id"]
 
 
 @app.on_event("startup")
@@ -627,14 +627,14 @@ async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscript
             thread, run_id = await client_wrapper._find_thread_by_task_id(task_id)
             
             # Get the current run state
-            run_info = await client_wrapper.client.runs.get(thread.thread_id, run_id)
-            thread_state = await client_wrapper.client.threads.get_state(thread.thread_id)
+            run_info = await client_wrapper.client.runs.get(thread["thread_id"], run_id)
+            thread_state = await client_wrapper.client.threads.get_state(thread["thread_id"])
             
             # Send the current task status
-            task_state = client_wrapper._run_status_to_task_state(run_info.status)
+            task_state = client_wrapper._run_status_to_task_state(run_info["status"])
             current_status = TaskStatus(
                 state=task_state,
-                timestamp=run_info.updated_at
+                timestamp=run_info["updated_at"]
             )
             
             # Send current status using the helper
@@ -642,10 +642,10 @@ async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscript
             
             # Check if the run is still active (not completed, failed, etc.)
             # Statuses like "pending", "running", "interrupted" would qualify
-            if run_info.status not in ["success", "error", "timeout", "canceled"]:
+            if run_info["status"] not in ["success", "error", "timeout", "canceled"]:
                 # Join the existing run using the join method
                 stream = await client_wrapper.client.runs.join_stream(
-                    thread_id=thread.thread_id,
+                    thread_id=thread["thread_id"],
                     run_id=run_id,
                     stream_mode=["values", "messages"]
                 )

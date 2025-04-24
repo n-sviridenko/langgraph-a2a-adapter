@@ -105,9 +105,9 @@ def get_agent_card_from_env(
         An A2A AgentCard
     """
     # Extract properties from configuration with defaults
-    name = AGENT_NAME or assistant.name or "LangGraph Assistant"
-    description = AGENT_DESCRIPTION or assistant.description or "An AI assistant powered by LangGraph"
-    version = AGENT_VERSION or str(assistant.version or "1.0.0")
+    name = AGENT_NAME or assistant["name"] or "LangGraph Assistant"
+    description = AGENT_DESCRIPTION or assistant.get("description") or "An AI assistant powered by LangGraph"
+    version = AGENT_VERSION or str(assistant.get("version") or "1.0.0")
     documentation_url = AGENT_DOCUMENTATION_URL
     
     # Provider information (optional)
