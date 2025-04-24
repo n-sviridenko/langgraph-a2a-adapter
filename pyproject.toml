@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "langgraph-a2a-proxy"
+name = "langgraph-a2a-adapter"
 version = "0.1.0"
 description = "A2A-compliant FastAPI server that proxies to LangGraph Server API"
 authors = ["Nikita Sviridenko <nikita.sviridenko@voypost.com>"]

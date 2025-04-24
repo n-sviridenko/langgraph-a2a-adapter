@@ -1,5 +1,5 @@
 """
-Configuration settings for the LangGraph A2A Proxy.
+Configuration settings for the LangGraph A2A Adapter.
 All settings are loaded from environment variables with sensible defaults.
 """
 

@@ -39,7 +39,7 @@ from config import (
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="LangGraph A2A Proxy",
+    title="LangGraph A2A Adapter",
     description="A2A-compliant FastAPI server that uses LangGraph SDK"
 )
 
@@ -146,7 +146,7 @@ def format_sse_update(request_id: str, task_id: str, update_content, final: bool
 @app.get("/")
 async def root():
     """Health check endpoint"""
-    return {"status": "ok", "message": "LangGraph A2A Proxy is running"}
+    return {"status": "ok", "message": "LangGraph A2A Adapter is running"}
 
 
 # A2A WELL-KNOWN ENDPOINT - Standard endpoint as specified by A2A protocol

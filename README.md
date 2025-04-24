@@ -1,10 +1,10 @@
-# LangGraph A2A Proxy
+# LangGraph A2A Adapter
 
 This project implements an [A2A Protocol](https://google.github.io/A2A/) compliant FastAPI server that proxies requests to the LangGraph Server API.
 
 ## Overview
 
-The LangGraph A2A Proxy allows A2A-compatible clients to interact with LangGraph assistants, providing:
+The LangGraph A2A Adapter allows A2A-compatible clients to interact with LangGraph assistants, providing:
 
 1. Agent discovery through agent cards
 2. Message exchange with assistants
@@ -12,7 +12,7 @@ The LangGraph A2A Proxy allows A2A-compatible clients to interact with LangGraph
 4. Streaming responses
 5. Push notifications for task updates
 
-The proxy translates between the A2A protocol format and the LangGraph API format, allowing seamless integration.
+The adapter translates between the A2A protocol format and the LangGraph API format, allowing seamless integration.
 
 ## Architecture
 
@@ -164,17 +164,16 @@ This will start the server on `http://localhost:8000`.
 | timeout              | failed         |
 | interrupted          | input-required |
 
-## Extending the Proxy
+## Limitations
 
-### Adding New RPC Methods
+- Supports only text-based input/output
+- Maps input files into langchain message content parts, but support wasn't tested
+- Maps messages into "messages" `values` item that's expected to be BaseMessage[] from langchain
+- Interrupted runs will be shown as 'input-required' but there is no way to resume the run
 
-1. Define the new request type in `a2a_models.py`
-2. Add a handler function in `main.py`
-3. Update the routing in the `handle_rpc_request` function
+## Roadmap
 
-### Supporting New LangGraph Features
-
-To support new LangGraph features, update the `LangGraphClientWrapper` class in `langgraph_client.py` with new methods that map between A2A and LangGraph formats.
+- Implement interrupts support
 
 ## License
 
