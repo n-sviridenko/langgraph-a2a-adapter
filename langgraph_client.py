@@ -262,7 +262,7 @@ class LangGraphClientWrapper:
         await self._update_thread_task_metadata(thread_id, task_id, run.run_id)
         
         # Now stream the run
-        stream = self.client.runs.stream(
+        stream = self.client.runs.join_stream(
             thread_id=thread_id,
             run_id=run.run_id,
             stream_mode=["values", "messages"]

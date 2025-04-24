@@ -51,9 +51,6 @@ app.add_middleware(
 # Global LangGraph client wrapper
 client_wrapper = None
 
-# Active WebSocket connections for streaming responses
-websocket_connections: Dict[str, WebSocket] = {}
-
 # Define errors
 JSONRPC_PARSE_ERROR = {"code": -32700, "message": "Invalid JSON payload"}
 JSONRPC_INVALID_REQUEST = {"code": -32600, "message": "Request payload validation error"}
@@ -552,9 +549,6 @@ async def handle_streaming_task(websocket: WebSocket, request: SendTaskStreaming
         session_id = request.params.sessionId
         message = request.params.message
         
-        # Store the websocket connection
-        websocket_connections[task_id] = websocket
-        
         # Check if session exists, if not create it
         try:
             await client_wrapper.get_session(session_id)
@@ -603,10 +597,6 @@ async def handle_streaming_task(websocket: WebSocket, request: SendTaskStreaming
             if should_close:
                 break
         
-        # Remove from connections
-        if task_id in websocket_connections:
-            del websocket_connections[task_id]
-            
         # Close websocket
         await websocket.close()
         
@@ -631,9 +621,6 @@ async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscript
         # Extract parameters
         task_id = request.params.id
         
-        # Store the websocket connection
-        websocket_connections[task_id] = websocket
-        
         # Try to find the thread and run
         try:
             # Find the thread and run using the task_id
@@ -657,10 +644,9 @@ async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscript
             # Statuses like "pending", "running", "interrupted" would qualify
             if run_info.status not in ["success", "error", "timeout", "canceled"]:
                 # Join the existing run using the join method
-                stream = await client_wrapper.client.runs.join(
+                stream = await client_wrapper.client.runs.join_stream(
                     thread_id=thread.thread_id,
                     run_id=run_id,
-                    stream=True,
                     stream_mode=["values", "messages"]
                 )
                 
