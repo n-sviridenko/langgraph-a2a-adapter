@@ -175,6 +175,9 @@ This will start the server on `http://localhost:8000`.
 ## Roadmap
 
 - Implement interrupts support
+- Add authentication for secure access
+- Provide Docker containerization
+- Develop CLI interface
 
 ## License
 
