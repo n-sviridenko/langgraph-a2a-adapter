@@ -6,7 +6,7 @@ All settings are loaded from environment variables with sensible defaults.
 import os
 
 # LangGraph Connection Settings
-LANGGRAPH_API_URL = os.getenv("LANGGRAPH_API_URL", "http://localhost:8123")
+LANGGRAPH_API_URL = os.getenv("LANGGRAPH_API_URL", "http://localhost:2024")
 LANGGRAPH_API_KEY = os.getenv("LANGGRAPH_API_KEY", None)
 LANGGRAPH_GRAPH_ID = os.getenv("LANGGRAPH_GRAPH_ID", None)
 

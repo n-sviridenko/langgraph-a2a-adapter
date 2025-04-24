@@ -105,7 +105,7 @@ cp .env.example .env
 Set the following environment variables:
 
 #### LangGraph Connection
-- `LANGGRAPH_API_URL` - URL of the LangGraph Server (default: `http://localhost:8123`)
+- `LANGGRAPH_API_URL` - URL of the LangGraph Server (default: `http://localhost:2024`)
 - `LANGGRAPH_API_KEY` - API key for LangGraph Server (if required)
 - `LANGGRAPH_GRAPH_ID` - Optional graph ID to select a specific assistant (if not set, uses the first available assistant)
 
