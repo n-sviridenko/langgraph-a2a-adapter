@@ -18,6 +18,10 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketState
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from langgraph_sdk import get_client
 from langgraph_sdk.schema import RunStatus
