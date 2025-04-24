@@ -5,12 +5,16 @@ A2A-compliant FastAPI server that proxies to LangGraph Server API
 import os
 import json
 import uuid
+import logging
+import io
+import asyncio
 from typing import Dict, List, Optional, Any, Union, AsyncIterator, Tuple, Awaitable
 from datetime import datetime
 
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, BackgroundTasks, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketState
 
@@ -51,6 +55,10 @@ app.add_middleware(
 # Global LangGraph client wrapper
 client_wrapper = None
 
+# Set up logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 # Define errors
 JSONRPC_PARSE_ERROR = {"code": -32700, "message": "Invalid JSON payload"}
 JSONRPC_INVALID_REQUEST = {"code": -32600, "message": "Request payload validation error"}
@@ -62,68 +70,77 @@ TASK_NOT_CANCELABLE_ERROR = {"code": -32002, "message": "Task cannot be canceled
 PUSH_NOTIFICATION_NOT_SUPPORTED_ERROR = {"code": -32003, "message": "Push Notification is not supported"}
 UNSUPPORTED_OPERATION_ERROR = {"code": -32004, "message": "This operation is not supported"}
 
+# Define additional errors
+SSE_METHOD_HTTP_ERROR = {
+    "code": -32010, 
+    "message": "Streaming method attempted via standard HTTP. For streaming, use SSE with content-type: text/event-stream"
+}
 
-async def send_websocket_update(
-    websocket: WebSocket, 
-    task_id: str, 
-    request_id: str, 
-    update: Union[TaskStatus, Artifact]
-) -> bool:
-    """
-    Send an update over WebSocket based on its type (TaskStatus or Artifact).
-    Returns True if the connection should be closed (final status received).
+
+def is_final_status(state: TaskState) -> bool:
+    """Check if a task state represents a final state"""
+    return state in [TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED]
+
+
+def format_sse_error(request_id: str, error_code: dict, message: str = None) -> str:
+    """Format error responses for SSE
     
-    Parameters:
-    - websocket: The WebSocket connection to send to
-    - task_id: The task ID associated with the update
-    - request_id: The JSON-RPC request ID for the response
-    - update: Either a TaskStatus or Artifact update to send
-    
+    Args:
+        request_id: The JSON-RPC request ID
+        error_code: The error code dictionary (e.g. JSONRPC_INTERNAL_ERROR)
+        message: Optional error message
+        
     Returns:
-    - should_close: True if this is a final status and the connection should close
+        Formatted JSON string for error response
     """
-    if isinstance(update, TaskStatus):
-        # Determine if this is a final status
-        is_final = update.state in [TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED]
-        
-        # Create and send status update event
-        status_event = TaskStatusUpdateEvent(
-            id=task_id,
-            status=update,
-            final=is_final
-        )
-        
-        status_response = JSONRPCResponse(
-            jsonrpc="2.0",
-            id=request_id,
-            result=status_event
-        )
-        
-        await websocket.send_text(status_response.json())
-        
-        # Return True if this is a final status (to break the loop)
-        return is_final
-        
-    elif isinstance(update, Artifact):
-        # Create and send artifact update event
-        artifact_event = TaskArtifactUpdateEvent(
-            id=task_id,
-            artifact=update
-        )
-        
-        artifact_response = JSONRPCResponse(
-            jsonrpc="2.0",
-            id=request_id,
-            result=artifact_event
-        )
-        
-        await websocket.send_text(artifact_response.json())
-        
-        # Artifacts don't signal end of communication
-        return False
+    error_data = error_code.copy()
+    if message:
+        error_data["data"] = {"message": message}
     
-    # Unknown update type
-    return False
+    error_response = JSONRPCResponse(
+        jsonrpc="2.0",
+        id=request_id,
+        error=JSONRPCError(**error_data)
+    )
+    return error_response.json()
+
+
+def format_sse_update(request_id: str, task_id: str, update_content, final: bool = False) -> str:
+    """Helper to format updates as JSON-RPC responses for SSE streaming
+    
+    Args:
+        request_id: The JSON-RPC request ID
+        task_id: The task ID
+        update_content: Either a TaskStatus or Artifact object
+        final: Whether this is the final update in the stream
+        
+    Returns:
+        A JSON string for the SSE response
+    """
+    if isinstance(update_content, TaskStatus):
+        # Create status update event
+        event = TaskStatusUpdateEvent(
+            id=task_id,
+            status=update_content,
+            final=final
+        )
+    elif isinstance(update_content, Artifact):
+        # Create artifact update event
+        event = TaskArtifactUpdateEvent(
+            id=task_id,
+            artifact=update_content
+        )
+    else:
+        # Directly use the content if it's already an event
+        event = update_content
+    
+    response = JSONRPCResponse(
+        jsonrpc="2.0",
+        id=request_id,
+        result=event
+    )
+    
+    return response.json()
 
 
 @app.get("/")
@@ -189,12 +206,28 @@ async def startup_event():
 @app.post("/rpc")
 async def handle_rpc_request(request: Request):
     """Handle JSON-RPC requests according to A2A protocol"""
+    # Check if this is an SSE request
+    is_sse_request = request.headers.get("accept") == "text/event-stream"
+    
     try:
         # Parse request body
-        body = await request.json()
+        body_bytes = await request.body()
+        body_str = body_bytes.decode('utf-8')
+        logger.info(f"Received RPC request: {body_str}")
+        
+        try:
+            body = json.loads(body_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON: {str(e)}")
+            return JSONRPCResponse(
+                jsonrpc="2.0",
+                id=None,
+                error=JSONRPCError(**JSONRPC_PARSE_ERROR)
+            )
         
         # Basic validation for JSON-RPC 2.0
         if not isinstance(body, dict):
+            logger.error(f"Invalid request format, not a dictionary: {type(body)}")
             return JSONRPCResponse(
                 jsonrpc="2.0",
                 id=None,
@@ -202,42 +235,70 @@ async def handle_rpc_request(request: Request):
             )
             
         # Create a request object
-        rpc_request = JSONRPCRequest(**body)
+        try:
+            rpc_request = JSONRPCRequest(**body)
+            logger.info(f"Parsed RPC request - method: {rpc_request.method}, id: {rpc_request.id}")
+        except Exception as e:
+            logger.error(f"Failed to create RPC request object: {str(e)}")
+            return JSONRPCResponse(
+                jsonrpc="2.0",
+                id=body.get("id"),
+                error=JSONRPCError(**JSONRPC_INVALID_REQUEST)
+            )
         
-        # Route to appropriate handler based on method
+        # Check if this is a streaming method 
+        is_streaming_method = rpc_request.method in ["tasks/sendSubscribe", "tasks/resubscribe"]
+        
+        # Handle streaming methods with SSE
+        if is_streaming_method:
+            if not is_sse_request:
+                # Client is trying to use a streaming method without SSE
+                logger.warning(f"Streaming method {rpc_request.method} attempted via standard HTTP without SSE")
+                return JSONRPCResponse(
+                    jsonrpc="2.0",
+                    id=rpc_request.id,
+                    error=JSONRPCError(**SSE_METHOD_HTTP_ERROR)
+                )
+                
+            # Set up SSE streaming response
+            return StreamingResponse(
+                handle_streaming_request(rpc_request, body),
+                media_type="text/event-stream"
+            )
+            
+        # Standard HTTP methods
         try:
             if rpc_request.method == "tasks/send":
+                logger.info(f"Handling tasks/send request")
                 return await handle_send_task(SendTaskRequest(**body))
             elif rpc_request.method == "tasks/get":
+                logger.info(f"Handling tasks/get request")
                 return await handle_get_task(GetTaskRequest(**body))
             elif rpc_request.method == "tasks/cancel":
+                logger.info(f"Handling tasks/cancel request")
                 return await handle_cancel_task(CancelTaskRequest(**body))
             elif rpc_request.method == "tasks/pushNotification/set":
+                logger.info(f"Handling tasks/pushNotification/set request")
                 return await handle_set_push_notification(SetTaskPushNotificationRequest(**body))
             elif rpc_request.method == "tasks/pushNotification/get":
+                logger.info(f"Handling tasks/pushNotification/get request")
                 return await handle_get_push_notification(GetTaskPushNotificationRequest(**body))
             else:
+                logger.warning(f"Unknown method: {rpc_request.method}")
                 return JSONRPCResponse(
                     jsonrpc="2.0",
                     id=rpc_request.id,
                     error=JSONRPCError(**JSONRPC_METHOD_NOT_FOUND)
                 )
         except Exception as e:
-            print(f"Error handling request: {str(e)}")
+            logger.error(f"Error handling request: {str(e)}", exc_info=True)
             return JSONRPCResponse(
                 jsonrpc="2.0",
                 id=rpc_request.id,
                 error=JSONRPCError(**JSONRPC_INTERNAL_ERROR)
             )
-            
-    except json.JSONDecodeError:
-        return JSONRPCResponse(
-            jsonrpc="2.0",
-            id=None,
-            error=JSONRPCError(**JSONRPC_PARSE_ERROR)
-        )
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
+        logger.error(f"Unexpected error in RPC handler: {str(e)}", exc_info=True)
         return JSONRPCResponse(
             jsonrpc="2.0",
             id=None,
@@ -498,75 +559,55 @@ async def handle_get_push_notification(request: GetTaskPushNotificationRequest) 
         )
 
 
-@app.websocket("/rpc")
-async def websocket_endpoint(websocket: WebSocket):
-    """Handle WebSocket connections for streaming tasks"""
-    await websocket.accept()
-    
+async def handle_streaming_request(rpc_request: JSONRPCRequest, body: dict) -> AsyncIterator[str]:
+    """Handle streaming requests (tasks/sendSubscribe and tasks/resubscribe) with SSE"""
     try:
-        # Get the initial message (should be a streaming request)
-        data = await websocket.receive_text()
-        request_data = json.loads(data)
-        
-        # Validate the request
-        if "method" not in request_data or request_data["method"] not in ["tasks/sendSubscribe", "tasks/resubscribe"]:
-            error_response = JSONRPCResponse(
-                jsonrpc="2.0",
-                id=request_data.get("id"),
-                error=JSONRPCError(**JSONRPC_METHOD_NOT_FOUND)
-            )
-            await websocket.send_text(error_response.json())
-            await websocket.close()
-            return
-            
-        if request_data["method"] == "tasks/sendSubscribe":
-            await handle_streaming_task(websocket, SendTaskStreamingRequest(**request_data))
-        elif request_data["method"] == "tasks/resubscribe":
-            await handle_resubscribe_task(websocket, TaskResubscriptionRequest(**request_data))
-            
-    except WebSocketDisconnect:
-        print("WebSocket disconnected")
+        if rpc_request.method == "tasks/sendSubscribe":
+            logger.info(f"Handling SSE tasks/sendSubscribe request")
+            async for event in handle_streaming_task(SendTaskStreamingRequest(**body)):
+                yield f"data: {event}\n\n"
+        elif rpc_request.method == "tasks/resubscribe":
+            logger.info(f"Handling SSE tasks/resubscribe request")
+            async for event in handle_resubscribe_task(TaskResubscriptionRequest(**body)):
+                yield f"data: {event}\n\n"
     except Exception as e:
-        print(f"Error in websocket handler: {str(e)}")
-        try:
-            if websocket.client_state != WebSocketState.DISCONNECTED:
-                error_response = JSONRPCResponse(
-                    jsonrpc="2.0",
-                    id=None,
-                    error=JSONRPCError(**JSONRPC_INTERNAL_ERROR, data={"message": str(e)})
-                )
-                await websocket.send_text(error_response.json())
-                await websocket.close()
-        except Exception:
-            pass
+        logger.error(f"Error in streaming handler: {str(e)}", exc_info=True)
+        yield f"data: {format_sse_error(rpc_request.id, JSONRPC_INTERNAL_ERROR, str(e))}\n\n"
 
 
-async def handle_streaming_task(websocket: WebSocket, request: SendTaskStreamingRequest):
-    """Handle tasks/sendSubscribe method"""
+async def handle_streaming_task(request: SendTaskStreamingRequest) -> AsyncIterator[str]:
+    """Handle tasks/sendSubscribe method with SSE streaming"""
     try:
         # Extract parameters
         task_id = request.params.id
         session_id = request.params.sessionId
         message = request.params.message
         
+        logger.info(f"Processing streaming task - task_id: {task_id}, session_id: {session_id}")
+        
         # Check if session exists, if not create it
         try:
             await client_wrapper.get_session(session_id)
+            logger.info(f"Found existing session for streaming: {session_id}")
         except Exception:
+            logger.info(f"Creating new session for streaming: {session_id}")
             await client_wrapper.create_session(session_id)
         
         # Get assistant ID
         try:
             assistant_id = await get_assistant_id()
+            logger.info(f"Using assistant_id for streaming: {assistant_id}")
         except ValueError as e:
-            error_response = JSONRPCResponse(
-                jsonrpc="2.0",
-                id=request.id,
-                error=JSONRPCError(**JSONRPC_INTERNAL_ERROR, data={"message": str(e)})
-            )
-            await websocket.send_text(error_response.json())
-            await websocket.close()
+            logger.error(f"Failed to get assistant ID for streaming: {str(e)}")
+            yield format_sse_error(request.id, JSONRPC_INTERNAL_ERROR, str(e))
             return
+        
+        # Process webhook if provided
+        webhook_url = None
+        if request.params.pushNotification:
+            push_config = request.params.pushNotification
+            webhook_url = push_config.url
+            logger.info(f"Using webhook URL for streaming: {webhook_url}")
         
         # Send initial status
         initial_status = TaskStatus(
@@ -574,52 +615,49 @@ async def handle_streaming_task(websocket: WebSocket, request: SendTaskStreaming
             timestamp=datetime.now()
         )
         
-        # Send initial status using the helper
-        await send_websocket_update(websocket, task_id, request.id, initial_status)
-        
-        # Process webhook if provided
-        webhook_url = None
-        if request.params.pushNotification:
-            push_config = request.params.pushNotification
-            webhook_url = push_config.url
+        # Use the helper function to format the initial status
+        yield format_sse_update(request.id, task_id, initial_status, False)
         
         # Start streaming using the simplified send_message method
-        async for update in client_wrapper.send_message(
+        # Await the coroutine to get the async iterator
+        message_stream = await client_wrapper.send_message(
             task_id=task_id,
             session_id=session_id,
             assistant_id=assistant_id,
             message=message,
             stream=True,
             webhook=webhook_url
-        ):
-            # Send the update and check if we should close
-            should_close = await send_websocket_update(websocket, task_id, request.id, update)
-            if should_close:
-                break
+        )
         
-        # Close websocket
-        await websocket.close()
+        # Now iterate over the async iterator
+        async for update in message_stream:
+            # Convert update to A2A event format using the helper
+            if isinstance(update, TaskStatus):
+                # Use the helper to check if this is a final status
+                final = is_final_status(update.state)
+                
+                # Use the helper function to format the status update
+                yield format_sse_update(request.id, task_id, update, final)
+                
+                # Break the stream if this is a final status
+                if final:
+                    break
+            elif isinstance(update, Artifact):
+                # Use the helper function to format the artifact update
+                yield format_sse_update(request.id, task_id, update)
         
     except Exception as e:
-        print(f"Error in handle_streaming_task: {str(e)}")
-        try:
-            if websocket.client_state != WebSocketState.DISCONNECTED:
-                error_response = JSONRPCResponse(
-                    jsonrpc="2.0",
-                    id=request.id,
-                    error=JSONRPCError(**JSONRPC_INTERNAL_ERROR, data={"message": str(e)})
-                )
-                await websocket.send_text(error_response.json())
-                await websocket.close()
-        except Exception:
-            pass
+        logger.error(f"Error in handle_streaming_task: {str(e)}", exc_info=True)
+        yield format_sse_error(request.id, JSONRPC_INTERNAL_ERROR, str(e))
 
 
-async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscriptionRequest):
-    """Handle tasks/resubscribe method"""
+async def handle_resubscribe_task(request: TaskResubscriptionRequest) -> AsyncIterator[str]:
+    """Handle tasks/resubscribe method with SSE streaming"""
     try:
         # Extract parameters
         task_id = request.params.id
+        
+        logger.info(f"Processing resubscribe request for task: {task_id}")
         
         # Try to find the thread and run
         try:
@@ -637,8 +675,11 @@ async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscript
                 timestamp=run_info["updated_at"]
             )
             
-            # Send current status using the helper
-            await send_websocket_update(websocket, task_id, request.id, current_status)
+            # Use the helper to check if this is a final status
+            final = is_final_status(task_state)
+            
+            # Use the helper function to format the current status
+            yield format_sse_update(request.id, task_id, current_status, final)
             
             # Check if the run is still active (not completed, failed, etc.)
             # Statuses like "pending", "running", "interrupted" would qualify
@@ -654,37 +695,27 @@ async def handle_resubscribe_task(websocket: WebSocket, request: TaskResubscript
                     # Use the shared helper method to process the chunk
                     update = client_wrapper._process_stream_chunk(chunk, task_id)
                     
-                    # Send the update and check if we should close
-                    should_close = await send_websocket_update(websocket, task_id, request.id, update)
-                    if should_close:
-                        break
-            
-            # Run is already complete or not streaming, close connection
-            await websocket.close()
+                    if isinstance(update, TaskStatus):
+                        # Use the helper to check if this is a final status
+                        final = is_final_status(update.state)
+                        
+                        # Use the helper function to format the status update
+                        yield format_sse_update(request.id, task_id, update, final)
+                        
+                        # Break if final status
+                        if final:
+                            break
+                    elif isinstance(update, Artifact):
+                        # Use the helper function to format the artifact update
+                        yield format_sse_update(request.id, task_id, update)
             
         except ValueError:
             # Task not found
-            error_response = JSONRPCResponse(
-                jsonrpc="2.0",
-                id=request.id,
-                error=JSONRPCError(**TASK_NOT_FOUND_ERROR)
-            )
-            await websocket.send_text(error_response.json())
-            await websocket.close()
+            yield format_sse_error(request.id, TASK_NOT_FOUND_ERROR)
             
     except Exception as e:
-        print(f"Error in handle_resubscribe_task: {str(e)}")
-        try:
-            if websocket.client_state != WebSocketState.DISCONNECTED:
-                error_response = JSONRPCResponse(
-                    jsonrpc="2.0",
-                    id=request.id,
-                    error=JSONRPCError(**JSONRPC_INTERNAL_ERROR, data={"message": str(e)})
-                )
-                await websocket.send_text(error_response.json())
-                await websocket.close()
-        except Exception:
-            pass
+        logger.error(f"Error in handle_resubscribe_task: {str(e)}", exc_info=True)
+        yield format_sse_error(request.id, JSONRPC_INTERNAL_ERROR, str(e))
 
 
 if __name__ == "__main__":
