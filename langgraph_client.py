@@ -199,45 +199,37 @@ class LangGraphClientWrapper:
         return self._create_task_from_run(task_id, thread["thread_id"], run_info, thread_state)
     
     def _process_stream_chunk(self, chunk: StreamPart, task_id: str = None) -> Union[TaskStatus, Artifact]:
-        """Process a stream chunk and convert it to either TaskStatus or Artifact.
-        This is a shared helper method that can be used by both internal methods and external code.
-        """
+        """Process a stream chunk and convert it to either TaskStatus or Artifact."""
         if chunk.event == "values":
-            # Values event - convert to TaskStatus
-            return TaskStatus(
-                state=TaskState.WORKING,
-                timestamp=datetime.now()
-            )
+            # Values event - look for messages in the data
+            if "messages" in chunk.data and isinstance(chunk.data["messages"], list):
+                # Find the latest AI message in the messages array
+                ai_messages = [m for m in chunk.data["messages"] if m.get("type") == "ai"]
+                if ai_messages:
+                    # Get the most recent AI message
+                    latest_ai = ai_messages[-1]
+                    # Extract content
+                    content = latest_ai.get("content", "")
+                    # Create artifact from this message
+                    return Artifact(parts=[TextPart(text=str(content))], index=0)
+            
+            # Default working status
+            return TaskStatus(state=TaskState.WORKING, timestamp=datetime.now())
         
         elif chunk.event == "messages":
             # Message event - convert to Artifact
             parts = []
-            
-            # Extract message content
             if "content" in chunk.data:
                 content = chunk.data["content"]
-                if isinstance(content, str):
-                    parts.append(TextPart(text=content))
-                elif isinstance(content, dict):
-                    parts.append(DataPart(data=content))
-            
-            return Artifact(
-                parts=parts,
-                index=0
-            )
-            
+                parts.append(TextPart(text=str(content)))
+            return Artifact(parts=parts, index=0)
+                
         elif chunk.event == "end":
             # End event - yield final status
-            return TaskStatus(
-                state=TaskState.COMPLETED,
-                timestamp=datetime.now()
-            )
+            return TaskStatus(state=TaskState.COMPLETED, timestamp=datetime.now())
         
         # For unknown events, return working status
-        return TaskStatus(
-            state=TaskState.WORKING,
-            timestamp=datetime.now()
-        )
+        return TaskStatus(state=TaskState.WORKING, timestamp=datetime.now())
 
     async def _create_stream_run(
         self, 
@@ -249,28 +241,56 @@ class LangGraphClientWrapper:
         webhook: Optional[str] = None
     ) -> AsyncIterator[Union[TaskStatus, Artifact]]:
         """Create a streaming run and yield results."""
-        # Create a run for streaming
-        run = await self.client.runs.create(
-            thread_id=thread_id,
-            assistant_id=assistant_id,
-            input=input_dict,
-            metadata=run_metadata,
-            webhook=webhook
-        )
-        
-        # Update thread metadata
-        await self._update_thread_task_metadata(thread_id, task_id, run["run_id"])
-        
-        # Now stream the run
-        stream = self.client.runs.join_stream(
-            thread_id=thread_id,
-            run_id=run["run_id"],
-            stream_mode=["values", "messages"]
-        )
-        
-        async for chunk in stream:
-            # Use the shared helper method to process the chunk
-            yield self._process_stream_chunk(chunk, task_id)
+        try:
+            # Always yield an initial status
+            yield TaskStatus(
+                state=TaskState.SUBMITTED,
+                timestamp=datetime.now()
+            )
+            
+            # Create a run for streaming
+            run = await self.client.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                input=input_dict,
+                metadata=run_metadata,
+                webhook=webhook
+            )
+            
+            # Update thread metadata
+            await self._update_thread_task_metadata(thread_id, task_id, run["run_id"])
+            
+            # Yield a status indicating we're now processing
+            yield TaskStatus(
+                state=TaskState.WORKING,
+                timestamp=datetime.now()
+            )
+            
+            # Now stream the run - don't await the join_stream call
+            stream = self.client.runs.join_stream(
+                thread_id=thread_id,
+                run_id=run["run_id"],
+                stream_mode=["values", "messages"]
+            )
+            
+            # Process stream chunks
+            async for chunk in stream:
+                # Process and yield each chunk
+                yield self._process_stream_chunk(chunk, task_id)
+            
+            # Always yield a final completion status
+            yield TaskStatus(
+                state=TaskState.COMPLETED,
+                timestamp=datetime.now()
+            )
+            
+        except Exception as e:
+            print(f"Error in streaming run: {str(e)}")
+            # Ensure we yield an error status
+            yield TaskStatus(
+                state=TaskState.FAILED,
+                timestamp=datetime.now()
+            )
     
     def _message_to_langgraph_input(self, message: Message) -> Dict[str, Any]:
         """Convert A2A message to LangGraph base message format."""

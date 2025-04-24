@@ -685,7 +685,8 @@ async def handle_resubscribe_task(request: TaskResubscriptionRequest) -> AsyncIt
             # Statuses like "pending", "running", "interrupted" would qualify
             if run_info["status"] not in ["success", "error", "timeout", "canceled"]:
                 # Join the existing run using the join method
-                stream = await client_wrapper.client.runs.join_stream(
+                # Don't await the join_stream call - it returns an async generator, not an awaitable
+                stream = client_wrapper.client.runs.join_stream(
                     thread_id=thread["thread_id"],
                     run_id=run_id,
                     stream_mode=["values", "messages"]
