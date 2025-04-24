@@ -81,6 +81,7 @@ Set the following environment variables:
 - `AGENT_DOCUMENTATION_URL` - URL to the agent's documentation (optional)
 - `AGENT_PROVIDER_ORG` - Organization name for the agent provider (optional)
 - `AGENT_PROVIDER_URL` - URL for the agent provider (optional)
+- `AGENT_SKILLS` - JSON array of skills objects with format: `[{"id": "skill_id", "name": "Skill Name", "description": "Skill description", "examples": ["example1", "example2"]}]` (default: basic chat skill)
 
 ### Running the Server
 

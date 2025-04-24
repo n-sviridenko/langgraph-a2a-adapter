@@ -24,6 +24,7 @@ AGENT_VERSION = os.getenv("AGENT_VERSION", "1.0.0")
 AGENT_DOCUMENTATION_URL = os.getenv("AGENT_DOCUMENTATION_URL", None)
 AGENT_PROVIDER_ORG = os.getenv("AGENT_PROVIDER_ORG", None)
 AGENT_PROVIDER_URL = os.getenv("AGENT_PROVIDER_URL", None)
+AGENT_SKILLS_JSON = os.getenv("AGENT_SKILLS", None)
 
 def get_base_url() -> str:
     """
