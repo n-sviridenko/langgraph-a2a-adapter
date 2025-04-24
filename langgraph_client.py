@@ -337,7 +337,8 @@ class LangGraphClientWrapper:
     def _run_status_to_task_state(self, status: RunStatus) -> TaskState:
         """Map LangGraph run status to A2A task state."""
         status_map = {
-            "pending": TaskState.WORKING,
+            "pending": TaskState.SUBMITTED,
+            "running": TaskState.WORKING,
             "error": TaskState.FAILED,
             "success": TaskState.COMPLETED,
             "timeout": TaskState.FAILED,

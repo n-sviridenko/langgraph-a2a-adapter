@@ -158,7 +158,8 @@ This will start the server on `http://localhost:8000`.
 
 | LangGraph Run Status | A2A Task State |
 |----------------------|----------------|
-| pending              | working        |
+| pending              | submitted      |
+| running              | working        |
 | error                | failed         |
 | success              | completed      |
 | timeout              | failed         |
