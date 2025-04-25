@@ -1,5 +1,7 @@
 # LangGraph A2A Adapter
 
+> **ℹ️ Note**: Example of how to use it along with a video-overview can be found here: https://github.com/n-sviridenko/langgraph-a2a-mcp-example
+
 This project implements an [A2A Protocol](https://google.github.io/A2A/) compliant FastAPI server that proxies requests to the LangGraph Server API.
 
 ## Overview
